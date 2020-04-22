@@ -1,6 +1,6 @@
 ---
 title: "Exploring the health and economic imapcts of storm events in NOAA Storm Database"
-author: "Eric Benzel"
+author: "E. Benzel"
 date: "4/21/2020"
 output: html_document
 ---
@@ -11,24 +11,157 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ## Synopsis
 
-## Loading and Processing the Raw Data
-The data for this assignment come in the form of a comma-separated-value file compressed via the bzip2 algorithm to reduce its size. You can download the file from the course web site: (Storm Data)[https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2] 
+## Loading and Processing the Data
+The data for this assignment come in the form of a comma-separated-value file compressed via the bzip2 algorithm to reduce its size. You can download the file from the course web site: [Storm Data](https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2) 
 
-There is also some documentation of the database available. Here you will find how some of the variables are constructed/defined.
+There is also some documentation of the database available. Here you will find how some of the variables are constructed/defined: 
+[National Weather Service Storm Data Documentation](https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2Fpd01016005curr.pdf)
 
-National Weather Service Storm Data Documentation
-National Climatic Data Center Storm Events FAQ
 The events in the database start in the year 1950 and end in November 2011. In the earlier years of the database there are generally fewer events recorded, most likely due to a lack of good records. More recent years should be considered more complete.
 
-```{r}
+```{r, results = 'hide', message= FALSE, warning = FALSE}
+#load packages
+library(tidyverse)
+library(lubridate)
+library(stringdist)
+```
 
+```{r, cache = TRUE}
+download.file("https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2","stormdata.csv.bz2")
+storm.raw <- read_csv("stormdata.csv.bz2", col_types = cols(
+    .default = col_double(),
+    BGN_DATE = col_datetime(format = "%m/%d/%Y %H:%M:%S"),
+    BGN_TIME = col_character(),
+    TIME_ZONE = col_character(),
+    COUNTYNAME = col_character(),
+    STATE = col_character(),
+    EVTYPE = col_character(),
+    BGN_AZI = col_character(),
+    BGN_LOCATI = col_character(),
+    END_DATE = col_character(),
+    END_TIME = col_character(),
+    COUNTYENDN = col_character(),
+    END_AZI = col_character(),
+    END_LOCATI = col_character(),
+    PROPDMGEXP = col_character(),
+    CROPDMGEXP = col_character(),
+    WFO = col_character(),
+    STATEOFFIC = col_character(),
+    ZONENAMES = col_character(),
+    REMARKS = col_character()
+))
+```
+
+First we can explore the general properties of the data set.
+```{r}
+dim(storm.raw)
+```
+Note there are 902297 observations of 37 variables. The variable of interest in both questions is EVTYPE which represents the type of storm event. Since according to [NOAA](https://www.ncdc.noaa.gov/stormevents/details.jsp?type=eventtype) all event types were gathered from 1996 onwards, only these years are subseted since both research questions regard comparsion between event types.
+
+```{r}
+storm.tmp <- storm.raw %>%
+    filter(year(BGN_DATE) >= 1996) 
+```
+
+### Processing event types
+According to documentation linked above, there are 48 official event types: these events were copied into a .txt file and loaded into the data set. 
+```{r, message=F}
+evtypes <- read_table("eventtypes.txt", col_names = "EVTYPE")
+evtypes$EVTYPE <- tolower(evtypes$EVTYPE)
+evtypes$EVTYPE <- str_replace(evtypes$EVTYPE, "/", " ")
 ```
 
 
-## Results
+```{r}
+length(unique(storm.tmp$EVTYPE))
+```
 
+Yet there are 508 unique values of the `EVTYPE` variable, so the code below cleans this variable.
+
+First, high occurence abbreviations are replaced and slash charachers are removed.
+
+```{r}
+storm.tmp$EVTYPE <- storm.tmp$EVTYPE %>%
+    tolower()  %>%
+    str_replace("tstm", "thunderstorm") %>%
+    str_replace("fld", "flood") %>%
+    str_replace("/", " ")
+
+```
+
+Then, the function amatch from the package `stringdist` is used to match the variable `EVTYPE` to the set of official event types.
+
+```{r, cache = TRUE}
+storm.tmp$EVTYPEmatch <- 
+    evtypes$EVTYPE[amatch(x = storm.tmp$EVTYPE, table=evtypes$EVTYPE)]
+
+mean(is.na(storm.tmp$EVTYPEmatch))
+```
+Non matches (`NA`) represent 2.1% of the data set which might represent a significant contribution to harm. Therefore any instances of non matches are replaced with their original value. 
+```{r}
+storm.tmp$EVTYPEmatch[is.na(storm.tmp$EVTYPEmatch)] <- storm.tmp$EVTYPE[is.na(storm.tmp$EVTYPEmatch)]
+```
+
+### Create data frame with variables of interest
+For this analysis, we are going to analyze health and economic impact. Relevant health variables are `FATALITIES` and `INJURIES`. Relevant economic variables are `PROPDMG`, `PROPDMGEXP`, `CROPDMG`, and `CROPDMGEXP`.
+
+### Processing 
+Since economic variables are split into two variables, these need to be combined according to the exponential code in `EXP`. [This](https://rstudio-pubs-static.s3.amazonaws.com/58957_37b6723ee52b455990e149edde45e5b6.html) article by Eddie Song referenced in the course forum was used to decode and process the two `EXP` variables.
+
+```{r, message = F}
+expprop <- read_delim("EXPcodes.txt", col_names = c("PROPDMGEXP", "PROPMULT"), delim = ",")
+expcrop <- read_delim("EXPcodes.txt", col_names = c("CROPDMGEXP", "CROPMULT"), delim = ",")
+head(expprop)
+
+storm.tmp2 <- storm.tmp %>%
+    left_join(expprop) %>%
+    left_join(expcrop) %>%
+    filter(!is.na(PROPMULT)) %>% #NA EXP indicates 0 damage
+    filter(!is.na(CROPMULT)) %>%
+    filter(!is.na(CROPDMG)) %>%
+    filter(!is.na(PROPDMG)) %>%
+    mutate(propertyloss = as.numeric(PROPDMG)*as.numeric(PROPMULT)) %>%
+    mutate(croploss = as.numeric(CROPDMG)*as.numeric(CROPMULT))
+    
+```
+
+Finally, relevant variables are selected for analysis.
+
+```{r}
+storm.tmp2 <- mutate(storm.tmp2, year = year(BGN_DATE))
+
+storm <- storm.tmp2 %>%
+    select(event = EVTYPEmatch, fatalities = FATALITIES, injuries = INJURIES, propertyloss, croploss)
+
+head(storm)
+```
+
+## Results
 ### Which types of events are most harmful with respect to population health in the US?
+First the data is grouped by event type and the sum across all instances is found. The question could be interpreted in two ways: which type of events are individually more harmful or which type of events in aggregate are more harmful. This analysis seeks to answer the second question.
+
+```{r}
+storm.totals <- storm %>%
+    count(event)
+
+storm.byevent <- storm %>%
+    select(-c("propertyloss", "croploss")) %>%
+    group_by(event) %>%
+    summarise_all(sum) %>%
+    left_join(storm.totals)
+
+summary(storm.byevent)
+```
+As one can see from the summary charts above, there is a large range in the impact across event types with the majority of events types (at least 75%) having 0 fatalities or injuries. The graph below shows the data grouped by event type and plotted showing the number of fatalities and injuries for each event with the size of each point showing the number of that event type that occured.
+```{r}
+storm.byevent %>%
+    ggplot(aes(x = fatalities, y = injuries)) +
+    geom_point(aes(size = n)) +
+    labs(x = "# of fatalities", y = "# of injuries") +
+    coord_cartesian(xlim = c(0, 2500)) +
+    geom_text(aes(label = ifelse(injuries > 1500,as.character(event),"")), hjust = -.15, vjust = -.15)
+```
+
+As you can see from the plot above, 
 
 ### Which types of events have the greatest economic consequences in the US?
-
-Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
