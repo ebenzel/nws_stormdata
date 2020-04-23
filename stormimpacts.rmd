@@ -1,5 +1,5 @@
 ---
-title: "Exploring the health and economic imapcts of storm events in NOAA Storm Database"
+title: "Exploring the health and economic impacts of storm events in NOAA Storm Database"
 author: "E. Benzel"
 date: "4/21/2020"
 output: html_document
@@ -10,6 +10,7 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ## Synopsis
+In this report I aim to determine the types of severe weather events that have greatest health and economic impacts in the US between the years 1996 and 2011. To investigate this, data was obtained from the NWS Storm Database was obtained specifically between the years of 1996 and 2011 due to complete event set during those years. From this data, I find that tornado, excessive heat, flood, thunderstaorm wind, lightning, flash flood, and rip current have the greatest health impact and flood, huricane typhoon, hail, flash flood, drought, hurricane, extreme cold, and frost freze have the greatest economic impact.  
 
 ## Loading and Processing the Data
 The data for this assignment come in the form of a comma-separated-value file compressed via the bzip2 algorithm to reduce its size. You can download the file from the course web site: [Storm Data](https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2) 
@@ -24,6 +25,8 @@ The events in the database start in the year 1950 and end in November 2011. In t
 library(tidyverse)
 library(lubridate)
 library(stringdist)
+library(scales)
+library(ggrepel)
 ```
 
 ```{r, cache = TRUE}
@@ -69,6 +72,7 @@ According to documentation linked above, there are 48 official event types: thes
 evtypes <- read_table("eventtypes.txt", col_names = "EVTYPE")
 evtypes$EVTYPE <- tolower(evtypes$EVTYPE)
 evtypes$EVTYPE <- str_replace(evtypes$EVTYPE, "/", " ")
+evtypes
 ```
 
 
@@ -111,7 +115,7 @@ Since economic variables are split into two variables, these need to be combined
 ```{r, message = F}
 expprop <- read_delim("EXPcodes.txt", col_names = c("PROPDMGEXP", "PROPMULT"), delim = ",")
 expcrop <- read_delim("EXPcodes.txt", col_names = c("CROPDMGEXP", "CROPMULT"), delim = ",")
-head(expprop)
+expprop
 
 storm.tmp2 <- storm.tmp %>%
     left_join(expprop) %>%
@@ -136,32 +140,75 @@ storm <- storm.tmp2 %>%
 head(storm)
 ```
 
-## Results
-### Which types of events are most harmful with respect to population health in the US?
-First the data is grouped by event type and the sum across all instances is found. The question could be interpreted in two ways: which type of events are individually more harmful or which type of events in aggregate are more harmful. This analysis seeks to answer the second question.
+Finally, the data is grouped by event type and the sum across all instances is found. The question could be interpreted in two ways: which type of events are individually more harmful or which type of events in aggregate are more harmful. This analysis seeks to answer the second question.
 
 ```{r}
 storm.totals <- storm %>%
     count(event)
 
 storm.byevent <- storm %>%
-    select(-c("propertyloss", "croploss")) %>%
     group_by(event) %>%
     summarise_all(sum) %>%
     left_join(storm.totals)
-
-summary(storm.byevent)
 ```
-As one can see from the summary charts above, there is a large range in the impact across event types with the majority of events types (at least 75%) having 0 fatalities or injuries. The graph below shows the data grouped by event type and plotted showing the number of fatalities and injuries for each event with the size of each point showing the number of that event type that occured.
+
+## Results
+### Which types of events are most harmful with respect to population health in the US?
+As one can see from the summary charts below, there is a large range in the impact across event types with the majority of events types (at least 75%) having 0 fatalities or injuries. 
+```{r}
+summary(select(storm.byevent, fatalities, injuries))
+```
+
+
+The graph below shows the data grouped by event type and plotted showing the number of fatalities and injuries for each event with the size of each point showing the number of that event type that occured.
 ```{r}
 storm.byevent %>%
+    filter(fatalities > 0) %>%
+    filter(injuries > 0) %>%
+    
     ggplot(aes(x = fatalities, y = injuries)) +
     geom_point(aes(size = n)) +
     labs(x = "# of fatalities", y = "# of injuries") +
     coord_cartesian(xlim = c(0, 2500)) +
-    geom_text(aes(label = ifelse(injuries > 1500,as.character(event),"")), hjust = -.15, vjust = -.15)
+    geom_text(aes(label = ifelse(fatalities > 300,as.character(event),"")), hjust = -.15, vjust = -.15) +
+    ggtitle("Injury, Fatality, and Prominance of storm Events from 1996 and 2011")
 ```
 
-As you can see from the plot above, 
+As you can see from the plot above, the labeled seven event types have a disproportionate impact on health related outcomes, specifically: tornado, excessive heat, flood, thunderstaorm wind, lightning, flash flood, and rip current Of these, excessive heat and tornado might be considered the most harmful both due to the high fatality and injury count but also due to their relatively small event count relative to the other most harmful events. One potential challenge to these results would be if the event types left unmatched in the data sorting did interesect to form significant contributions however due to the limited scope of this project, this possibility will remain a priority for future exploration.
 
 ### Which types of events have the greatest economic consequences in the US?
+
+```{r}
+summary(select(storm.byevent, propertyloss, croploss))
+```
+Similar to health related outcomes, the majority of event types had no economic impact however the maximum impacts are on the maginitude of billions of dollars. The events with the top 10 greatest economic impacts are examined below.
+```{r}
+ arrange(top_n(storm.byevent,10,propertyloss), desc(propertyloss))
+ arrange(top_n(storm.byevent,10,croploss), desc(croploss))
+```
+From these two tables, it is clear that one event causes disproportionate impact on each type of economic outcome. Drought causes approximately 13.4 billion dollars in crop damage since 1996 which is about two and a half more times as impactful as the next most harmful event, floods. Similarily, in overall property damage, floods cause about 144 billion dollars of damage a year which is more than twice the impact of the next most harmful event, hurricane typhoons 
+
+Since economic impact to property is on the order of ten times the impact of crop damage, these two economic variables were combined to figure the overall total economic damage. 
+```{r}
+storm.econ <- storm.byevent %>%
+    mutate(econloss = propertyloss + croploss)
+```
+
+
+The graph below shows the data grouped by event type and plotted showing the total economic impact for each event by the number of events that have ocurred for continuity from above. Data was filterd to show only those events with economic impact in the billions of dolars or higher.
+```{r}
+storm.econ %>%
+    filter(croploss > 10^9) %>%
+    
+    ggplot(aes(x = n, y = econloss, label = event)) +
+    geom_point(aes(size = n)) +
+    labs(x = "Number of Events", y = "Total Economic Damages $") +
+    scale_x_log10(breaks = trans_breaks("log10", function(x) 10^x),
+              labels = trans_format("log10", math_format(10^.x))) +
+    scale_y_log10(breaks = trans_breaks("log10", function(x) 10^x),
+              labels = trans_format("log10", math_format(10^.x))) +
+    geom_text_repel() +
+    ggtitle("Total Economic Impact of Storm Events by Frequency of Occurence")
+```
+
+As you can see form the graph, the events with the highest economic impact (impacts in the billions) are flood, huricane typhoon, hail, flash flood, drought, hurricane, extreme cold, and frost freze. Of particular impact are flood and huricane typhoons: both of the events have relatively small numbers of events yet have impacts in the high tens or hundreds of billions.
